@@ -1,74 +1,87 @@
 import pyaudio
 import numpy as np
-import matplotlib.pyplot as plt
+import librosa
 import scipy.io.wavfile as wav
-import wave
+import sys
 
 p = pyaudio.PyAudio()
 
 input = p.open(format=pyaudio.paInt16, channels=1, rate=44100, input=True, frames_per_buffer=1024)
 
-def load_output_audio(file_path):
-    with wave.open(file_path, 'rb') as f:
-        sample_rate = f.getframerate()
-        data = f.readframes(f.getnframes())
-        signal = np.frombuffer(data, dtype=np.int16)
-    return signal, sample_rate
+output = p.open(format=pyaudio.paInt16, channels=1, rate=44100, output=True, frames_per_buffer=1024)
 
-speaker_output_signal, sample_rate = load_output_audio("test.wav")
-speaker_output_index = 0
+def apply_robot_effect(audio_data):
+    modulated = audio_data * np.sin(2 * np.pi * 50 * np.arange(len(audio_data)) / 44100)
+    return modulated.astype(np.int16)
 
-output_audio = []
+def apply_alien_effect(audio_data):
+    audio_data_float = audio_data.astype(np.float32) / 32768.0  
+    alien_audio = librosa.effects.pitch_shift(audio_data_float, sr=44100, n_steps=8)  
+    return (alien_audio * 32768.0).astype(np.int16)  
 
-def lms_filter(x, d, mu=0.001, filter_order=64):
-    n = len(x)
-    w = np.zeros(filter_order, dtype=np.float32)
-    y = np.zeros(n, dtype=np.float32)
-    e = np.zeros(n, dtype=np.float32)
+def apply_chipmunk_effect(audio_data):
+    audio_data_float = audio_data.astype(np.float32) / 32768.0  
+    chipmunk_audio = librosa.effects.time_stretch(audio_data_float, rate=1.5)  
+    return (chipmunk_audio * 32768.0).astype(np.int16)  
 
-    for i in range(filter_order, n):
-        x_slice = x[i:i-filter_order:-1]
-        y[i] = np.dot(w, x_slice)
-        e[i] = d[i] - y[i]
-        w += mu * e[i] * x_slice
-        w = np.clip(w, -1.0, 1.0)  
+def apply_giant_effect(audio_data):
+    audio_data_float = audio_data.astype(np.float32) / 32768.0  
+    giant_audio = librosa.effects.time_stretch(audio_data_float, rate=0.7)  
+    return (giant_audio * 32768.0).astype(np.int16)  
 
-    return e
+def apply_echo_effect(audio_data):
+    echo = np.zeros_like(audio_data)
+    echo_delay = 1024  
+    echo[echo_delay:] = audio_data[:-echo_delay] * 0.5
+    return (audio_data + echo).astype(np.int16)
 
-def echo_cancel(mic_input, speaker_output, mu=0.001, filter_order=64):
-    return lms_filter(speaker_output, mic_input, mu, filter_order)
+def real_time_voice_changer(effect):
+    recorded_audio = []  
 
-def real_time_noise_cancellation():
-    global speaker_output_index
     try:
         while True:
             mic_input_data = input.read(1024, exception_on_overflow=False)
-            mic_signal = np.frombuffer(mic_input_data, dtype=np.int16).astype(np.float32) / 32768.0
+            mic_signal = np.frombuffer(mic_input_data, dtype=np.int16)
 
-            if speaker_output_index + 1024 > len(speaker_output_signal):
-                speaker_output_index = 0  
-            speaker_signal = speaker_output_signal[speaker_output_index:speaker_output_index + 1024].astype(np.float32) / 32768.0
-            speaker_output_index += 1024
+            if effect == "robot":
+                output_signal = apply_robot_effect(mic_signal)
+            elif effect == "alien":
+                output_signal = apply_alien_effect(mic_signal)
+            elif effect == "chipmunk":
+                output_signal = apply_chipmunk_effect(mic_signal)
+            elif effect == "giant":
+                output_signal = apply_giant_effect(mic_signal)
+            elif effect == "echo":
+                output_signal = apply_echo_effect(mic_signal)
+            else:
+                output_signal = mic_signal  
 
-            cleaned_signal = echo_cancel(mic_signal, speaker_signal)
-
-            output_audio.extend((cleaned_signal * 32768.0).astype(np.int16))  
+            output.write(output_signal.tobytes())
+            recorded_audio.extend(output_signal)
 
     except KeyboardInterrupt:
-        print("Exiting...")
+        print("Stopping voice changer...")
 
+    if recorded_audio:
+        recorded_audio = np.array(recorded_audio, dtype=np.int16)
+        output_file = f"output_{effect}.wav"
+        wav.write(output_file, 44100, recorded_audio)
+        print(f"Saved modified audio to {output_file}")
 
-real_time_noise_cancellation()
+if __name__ == "__main__":
+    print("Welcome to the Voice Changer!")
+    print("Available effects: robot, alien, chipmunk, giant, echo")
+    effect = input("Enter the effect you want to apply: ").strip().lower()
 
-output_audio = np.array(output_audio, dtype=np.int16)
-wav.write("output.wav", sample_rate, output_audio)
+    if effect not in ["robot", "alien", "chipmunk", "giant", "echo"]:
+        print("Invalid effect. Exiting...")
+        sys.exit()
 
-plt.plot(output_audio)
-plt.title("Output Audio Signal")
-plt.xlabel("Time")
-plt.ylabel("Amplitude")
-plt.show()
+    print(f"Applying {effect} effect. Press Ctrl+C to stop.")
+    real_time_voice_changer(effect)
 
 input.stop_stream()
 input.close()
+output.stop_stream()
+output.close()
 p.terminate()
