@@ -2,3 +2,4 @@ pyaudio
 librosa
 scipy
 numpy
+PyQt5
